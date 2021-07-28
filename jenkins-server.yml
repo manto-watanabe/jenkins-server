@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters: 
+  StackEnv:
+    Description: Stack Environment
+    Type: String
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+  KeyName:
+    Description: The EC2 Key Pair to allow SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-vpc"
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-igw"
+
+  VPCAttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref IGW
+
+  PublicSubnet1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1a
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-public-subnet1a"
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-routetable"
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1a
+      RouteTableId: !Ref RouteTable
+
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  EC2a:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref PublicSubnet1a
+      AvailabilityZone: ap-northeast-1a
+      KeyName: !Ref KeyName
+      ImageId: !Ref LatestAmiId
+      InstanceType: t2.medium
+      Monitoring: false
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData: !Base64 |
+        #!/bin/bash -ex
+        sudo yum update -y
+        sudo amazon-linux-extras install -y ansible2
+        sudo yum install -y java-1.8.0-openjdk-devel.x86_64
+        sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat/jenkins.repo
+        sudo rpm --import https://pkg.jenkins.io/redhat/jenkins.io.key
+        sudo yum install -y jenkins git
+        sudo systemctl start jenkins
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-ec2a"
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ec2 for jenkins
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: for http
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: for ssh
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: for jenkins
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-ec2sg"
+
+  JenkinsUser:
+    Type: AWS::IAM::User
+    Properties:
+      LoginProfile:
+        Password: '{{resolve:ssm-secure:test2:1}}'
+      Policies:
+        - PolicyName: AdministratorAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - '*'
+              Resource:
+                - '*'
+      Tags:
+        - Key: Name
+          Value: !Sub "${StackEnv}-jenkinsuser"
+      UserName: jenkins-from-cfn
+        
+
+
+  # JenkinsUser:
+  #   Type: AWS::IAM::User
+  #   Properties:
+  #     LoginProfile:
+  #       Password: AMHcgefsFEYBu-qqz_UD6fio
+  #     Policies:
+  #       - PolicyName: AmazonRDSFullAccess
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #           - Effect: Allow
+  #             Action:
+  #               - 'rds:*'
+  #               - 'application-autoscaling:DeleteScalingPolicy'
+  #               - 'application-autoscaling:DeregisterScalableTarget'
+  #               - 'application-autoscaling:DescribeScalableTargets'
+  #               - 'application-autoscaling:DescribeScalingActivities'
+  #               - 'application-autoscaling:DescribeScalingPolicies'
+  #               - 'application-autoscaling:PutScalingPolicy'
+  #               - 'application-autoscaling:RegisterScalableTarget'
+  #               - 'cloudwatch:DescribeAlarms'
+  #               - 'cloudwatch:GetMetricStatistics'
+  #               - 'cloudwatch:PutMetricAlarm'
+  #               - 'cloudwatch:DeleteAlarms'
+  #               - 'ec2:DescribeAccountAttributes'
+  #               - 'ec2:DescribeAvailabilityZones'
+  #               - 'ec2:DescribeCoipPools'
+  #               - 'ec2:DescribeInternetGateways'
+  #               - 'ec2:DescribeLocalGatewayRouteTables'
+  #               - 'ec2:DescribeLocalGatewayRouteTableVpcAssociations'
+  #               - 'ec2:DescribeLocalGateways'
+  #               - 'ec2:DescribeSecurityGroups'
+  #               - 'ec2:DescribeSubnets'
+  #               - 'ec2:DescribeVpcAttribute'
+  #               - 'ec2:DescribeVpcs'
+  #               - 'ec2:GetCoipPoolUsage'
+  #               - 'sns:ListSubscriptions'
+  #               - 'sns:ListTopics'
+  #               - 'sns:Publish'
+  #               - 'logs:DescribeLogStreams'
+  #               - 'logs:GetLogEvents'
+  #               - 'outposts:GetOutpostInstanceTypes'
+  #             Resource:
+  #               - '*'
+  #           - Effect: Allow
+  #             Action:
+  #               - 'pi:*'
+  #             Resource:
+  #               - 'arn:aws:pi:*:*:metrics/rds/*'
+  #           - Effect: Allow
+  #             Action:
+  #               - 'iam:CreateServiceLinkedRole'
+  #             Resource:
+  #               - '*'
+  #             Condition:
+  #               StringLike:
+  #                 iam:AWSServiceName:
+  #                   - rds.amazonaws.com
+  #                   - rds.application-autoscaling.amazonaws.com
